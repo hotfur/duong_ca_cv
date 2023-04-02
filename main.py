@@ -8,13 +8,13 @@ import cv2
 import numpy as np
 
 # Global constant
-color_distance_threshold = 10
+color_distance_threshold = 8
 black_threshold = 128
 morphology_iterations = 3
 
 if __name__ == '__main__':
     path = '../../data/line_trace/congthanh_solution/'
-    img = cv2.imread(cv2.samples.findFile(path + "0" + ".png"))
+    img = cv2.imread(cv2.samples.findFile(path + "142" + ".png"))
     # Gaussian filter to slightly reduce noise
     img_blurred = cv2.GaussianBlur(img, ksize=(3,3), sigmaX=1, sigmaY=1)
     # Convert to Lab
