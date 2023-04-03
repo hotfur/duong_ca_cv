@@ -1,38 +1,32 @@
-"""Program to detect line
-@author Vuong Kha Sieu
-@author Nguyen Hoang An
-@author Le Thai Bach
-"""
-
+# importing libraries
 import cv2
+import math
 import numpy as np
-import queue
 import torch
 import kornia as K
-
+import queue
 # Global constant
 color_distance_threshold = 8
+# black_threshold = 128
 black_threshold = 50
-morphology_iterations = 3
-
-if __name__ == '__main__':
-    path = '../../data/line_trace/congthanh_solution/'
-    img = cv2.imread(cv2.samples.findFile(path + "0" + ".png"))
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    x_bgr: torch.tensor = K.image_to_tensor(img)
-    x_bgr = x_bgr.unsqueeze(0)
-    x_bgr = x_bgr.to(device)
-    x_rgb: torch.tensor = K.color.bgr_to_rgb(x_bgr) / 255
-    # Gaussian filter to slightly reduce noise
-    gauss = K.filters.GaussianBlur2d(kernel_size=(3,3), sigma=(1.0,1.0))
-    img_blurred = gauss(x_rgb)
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+# Line color
+line_color = (100,0,255)
+direction_line_color = (255,100,0)
+text_location = (50,100)
+err = 0.0001
+def lane_making(img):
+    arr = np.array(img)
+    arr[:,0], arr[:,-1] = arr[:,-1], arr[:,0]
+    x_rgb = torch.tensor(arr, device=device).unsqueeze(0) / 255
+    x_rgb = torch.transpose(x_rgb, dim0=0, dim1=-1)[...,0]
+    x_rgb = x_rgb.unsqueeze(0)
     # Convert to Lab
-    img_blurred = K.color.rgb_to_lab(img_blurred)
+    img_blurred = K.color.rgb_to_lab(x_rgb)
     # Seperate the color components and lightning
-    img_blurred = img_blurred.squeeze(0)
-    lightning = img_blurred[0, :, :]
+    lightning = img_blurred[0, 0, :, :]
     mean_lightning = torch.mean(lightning)
-    color = img_blurred[1:, :, :]
+    color = img_blurred[0, 1:, :, :]
     color_dist = torch.sqrt(torch.sum(torch.pow(color, exponent=2), dim=0))
     # Apply adaptive thresholding for lightning matrix and global thresholding for color matrix
     # We must filter black pixel before feeding to otsu
@@ -43,27 +37,19 @@ if __name__ == '__main__':
     lightning_thresh = torch.tensor(lightning_thresh.astype(bool), device=device)
     mixture = torch.logical_and(color_thresh, lightning_thresh)
     thresh_result = torch.where(mixture, 1, 0)
-    # Apply morphology transformation to filter noises
-    kernel = torch.tensor([[0, 1, 0],[1, 1, 1],[0, 1, 0]], dtype=torch.float32, device=device)
-    morph = K.morphology.dilation(thresh_result[None,None,...], kernel=kernel)
-    morph = K.morphology.dilation(morph, kernel=kernel)
-    # Apply median filter to remove excessive noises
-    bw = K.filters.median_blur(morph, kernel_size=5)
     # Applying the Canny Edge filter
-    _, edges = K.filters.canny(bw, 0.01, 0.99)
-    edges = edges.squeeze()*255
-    edges = edges.to("cpu").numpy().astype(np.uint8)
+    bw = thresh_result.bool()
+    edges = cv2.Canny(np.uint8(thresh_result.to("cpu").numpy()*255), 0, 255)
     all_highlighted_area = torch.sum(bw)
-    bw = bw.bool()
     lines = cv2.HoughLines(edges, 1, np.pi / 90, 50, None, 0, 0)
     searched_lines = set()
-    _, _, h, w = bw.shape
+    h, w = bw.shape
     master_q = queue.PriorityQueue()
-    for line1_indx in range(10):
+    for line1_indx in range(min(10, len(lines))):
         aux_q = queue.PriorityQueue()
         line1 = lines[line1_indx]
         searched_lines.add(line1_indx)
-        for line2_indx in range(15):
+        for line2_indx in range(min(10, len(lines))):
             line2 = lines[line2_indx]
             if line2_indx not in searched_lines:
                 line_area = np.zeros((h, w), dtype=np.int16)
@@ -89,7 +75,10 @@ if __name__ == '__main__':
     searched_lines = []
     #for i in range(6):
     while not master_q.empty():
-        priority, line1, line2 = master_q.get()
+        try:
+            priority, line1, line2 = master_q.get()
+        except:
+            break
         searched_lines.append(line1)
         searched_lines.append(line2)
     for r_theta in searched_lines:
@@ -123,6 +112,22 @@ if __name__ == '__main__':
         # (0,0,255) denotes the colour of the line to be
         # drawn. In this case, it is red.
         cv2.line(img, (x1, y1), (x2, y2), (0, 0, 255), 2)
-    cv2.imwrite("test.jpg", img)
-
-
+    cv2.imshow('edges', img)
+    return
+# Create a VideoCapture object and read from input file
+cap = cv2.VideoCapture('../../data/line_trace/bacho/congthanh_solution.mp4')
+# Check if camera opened successfully
+if not cap.isOpened():
+    print("Error opening video file")
+# Read until video is completed
+while cap.isOpened():
+    # Capture frame-by-frame
+    ret, frame = cap.read()
+    if not ret:
+        break
+    if cv2.waitKey(25) & 0xFF == ord('q'):
+        break
+    lane_making(frame)
+# When everything done, release the video capture object & Closes all the frames
+cap.release()
+cv2.destroyAllWindows()
