@@ -7,8 +7,6 @@ import kornia as K
 import queue
 # Global constant
 color_distance_threshold = 8
-# black_threshold = 128
-black_threshold = 50
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 # Line color
 line_color = (100,0,255)
@@ -25,17 +23,13 @@ def lane_making(img):
     img_blurred = K.color.rgb_to_lab(x_rgb)
     # Seperate the color components and lightning
     lightning = img_blurred[0, 0, :, :]
-    mean_lightning = torch.mean(lightning)
+    std_mean_lightning = torch.std_mean(lightning)
     color = img_blurred[0, 1:, :, :]
     color_dist = torch.sqrt(torch.sum(torch.pow(color, exponent=2), dim=0))
     # Apply adaptive thresholding for lightning matrix and global thresholding for color matrix
-    # We must filter black pixel before feeding to otsu
-    lightning = torch.where(lightning > black_threshold, lightning, mean_lightning)
+    lightning = lightning > (std_mean_lightning[0] + std_mean_lightning[1])
     color_thresh = color_dist < color_distance_threshold
-    lightning = lightning.to("cpu").numpy().astype(np.uint16)
-    _, lightning_thresh = cv2.threshold(lightning, 0, 255, cv2.THRESH_OTSU)
-    lightning_thresh = torch.tensor(lightning_thresh.astype(bool), device=device)
-    mixture = torch.logical_and(color_thresh, lightning_thresh)
+    mixture = torch.logical_and(color_thresh, lightning)
     thresh_result = torch.where(mixture, 1, 0)
     # Applying the Canny Edge filter
     bw = thresh_result.bool()
@@ -45,11 +39,11 @@ def lane_making(img):
     searched_lines = set()
     h, w = bw.shape
     master_q = queue.PriorityQueue()
-    for line1_indx in range(min(10, len(lines))):
+    for line1_indx in range(min(12, len(lines))):
         aux_q = queue.PriorityQueue()
         line1 = lines[line1_indx]
         searched_lines.add(line1_indx)
-        for line2_indx in range(min(10, len(lines))):
+        for line2_indx in range(min(12, len(lines))):
             line2 = lines[line2_indx]
             if line2_indx not in searched_lines:
                 line_area = np.zeros((h, w), dtype=np.int16)
@@ -112,7 +106,7 @@ def lane_making(img):
         # (0,0,255) denotes the colour of the line to be
         # drawn. In this case, it is red.
         cv2.line(img, (x1, y1), (x2, y2), (0, 0, 255), 2)
-    cv2.imshow('edges', img)
+    cv2.imshow('edges', edges)
     return
 # Create a VideoCapture object and read from input file
 cap = cv2.VideoCapture('../../data/line_trace/bacho/congthanh_solution.mp4')
