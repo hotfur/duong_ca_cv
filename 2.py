@@ -30,20 +30,21 @@ def lane_making(img):
     lightning = lightning > (std_mean_lightning[0] + std_mean_lightning[1])
     color_thresh = color_dist < color_distance_threshold
     mixture = torch.logical_and(color_thresh, lightning)
-    thresh_result = torch.where(mixture, 1, 0)
+    thresh_result = torch.where(mixture, 1.0, 0.0)
     # Applying the Canny Edge filter
+    _, edges = K.filters.canny(thresh_result[None,None,...], 0.01, 0.99)
+    edges = torch.squeeze(edges).cpu().numpy().astype(np.uint8)*255
     bw = thresh_result.bool()
-    edges = cv2.Canny(np.uint8(thresh_result.to("cpu").numpy()*255), 0, 255)
     all_highlighted_area = torch.sum(bw)
     lines = cv2.HoughLines(edges, 1, np.pi / 90, 50, None, 0, 0)
     searched_lines = set()
     h, w = bw.shape
     master_q = queue.PriorityQueue()
-    for line1_indx in range(min(12, len(lines))):
+    for line1_indx in range(min(10, len(lines))):
         aux_q = queue.PriorityQueue()
         line1 = lines[line1_indx]
         searched_lines.add(line1_indx)
-        for line2_indx in range(min(12, len(lines))):
+        for line2_indx in range(min(10, len(lines))):
             line2 = lines[line2_indx]
             if line2_indx not in searched_lines:
                 line_area = np.zeros((h, w), dtype=np.int16)
@@ -106,7 +107,7 @@ def lane_making(img):
         # (0,0,255) denotes the colour of the line to be
         # drawn. In this case, it is red.
         cv2.line(img, (x1, y1), (x2, y2), (0, 0, 255), 2)
-    cv2.imshow('edges', edges)
+    cv2.imshow('edges', img)
     return
 # Create a VideoCapture object and read from input file
 cap = cv2.VideoCapture('../../data/line_trace/bacho/congthanh_solution.mp4')
