@@ -5,14 +5,45 @@ import numpy as np
 import torch
 import kornia as K
 import queue
+from concurrent.futures import ThreadPoolExecutor
 # Global constant
 color_distance_threshold = 8
+num_lines = 12 # CPU consumption
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 # Line color
 line_color = (100,0,255)
 direction_line_color = (255,100,0)
 text_location = (50,100)
 err = 0.0001
+def find_best_lines(master_q,lines, line1_indx, shape, bw, all_highlighted_area):
+    h, w = shape
+    aux_q = queue.PriorityQueue()
+    line1 = lines[line1_indx]
+    for line2_indx in range(min(num_lines, len(lines))):
+        line2 = lines[line2_indx]
+        line_area = np.zeros((h, w), dtype=np.int16)
+        pt11 = (int(line1[0][0] / np.cos(line1[0][1])), 0)
+        pt12 = (int((line1[0][0] - (h - 1) * np.sin(line1[0][1])) / np.cos(line1[0][1])), h - 1)
+        pt21 = (int(line2[0][0] / np.cos(line2[0][1])), 0)
+        pt22 = (int((line2[0][0] - (h - 1) * np.sin(line2[0][1])) / np.cos(line2[0][1])), h - 1)
+        pts = np.array([pt11, pt12, pt21, pt22])
+        cv2.fillPoly(line_area, [pts], color=1)
+        line_area = torch.tensor(line_area, device=device).bool()
+        true_area = torch.sum(torch.logical_and(line_area, bw))
+        good = true_area / torch.sum(line_area)
+        significant = true_area / all_highlighted_area
+        if good > 0.5 and significant > 0.05:
+            try:
+                aux_q.put((1 - significant, line1, line2))
+            except:
+                continue
+    if not aux_q.empty():
+        try:
+            best_pair = aux_q.get()
+            master_q.put(best_pair)
+        except:
+            return
+
 def lane_making(img):
     arr = np.array(img)
     arr[:,0], arr[:,-1] = arr[:,-1], arr[:,0]
@@ -38,38 +69,11 @@ def lane_making(img):
     all_highlighted_area = torch.sum(bw)
     lines = cv2.HoughLines(edges, 1, np.pi / 60, 50, None, 0, 0)
     if lines is None: return
-    searched_lines = set()
-    h, w = bw.shape
     master_q = queue.PriorityQueue()
-    for line1_indx in range(min(12, len(lines))):
-        aux_q = queue.PriorityQueue()
-        line1 = lines[line1_indx]
-        searched_lines.add(line1_indx)
-        for line2_indx in range(min(12, len(lines))):
-            line2 = lines[line2_indx]
-            if line2_indx not in searched_lines:
-                line_area = np.zeros((h, w), dtype=np.int16)
-                pt11 = (int(line1[0][0] / np.cos(line1[0][1])), 0)
-                pt12 = (int((line1[0][0] - (h - 1) * np.sin(line1[0][1])) / np.cos(line1[0][1])), h - 1)
-                pt21 = (int(line2[0][0] / np.cos(line2[0][1])), 0)
-                pt22 = (int((line2[0][0] - (h - 1) * np.sin(line2[0][1])) / np.cos(line2[0][1])), h - 1)
-                pts = np.array([pt11, pt12, pt21, pt22])
-                cv2.fillPoly(line_area, [pts], color=1)
-                line_area = torch.tensor(line_area, device=device).bool()
-                true_area = torch.sum(torch.logical_and(line_area, bw))
-                good = true_area / torch.sum(line_area)
-                significant = true_area / all_highlighted_area
-                if good > 0.5 and significant > 0.05:
-                    try: aux_q.put((1 - significant, line1, line2))
-                    except: continue
-        if not aux_q.empty():
-            try:
-                best_pair = aux_q.get()
-                master_q.put(best_pair)
-            except:
-                continue
+    with ThreadPoolExecutor() as e:
+        for line1_indx in range(min(num_lines, len(lines))):
+            e.submit(find_best_lines,master_q,lines, line1_indx, bw.shape, bw, all_highlighted_area)
     searched_lines = []
-    #for i in range(6):
     while not master_q.empty():
         try:
             priority, line1, line2 = master_q.get()
@@ -108,8 +112,8 @@ def lane_making(img):
         # (0,0,255) denotes the colour of the line to be
         # drawn. In this case, it is red.
         cv2.line(img, (x1, y1), (x2, y2), (0, 0, 255), 2)
-    cv2.imshow('edges', img)
-    return
+    #cv2.imshow('edges', img)
+    return img
 # Create a VideoCapture object and read from input file
 cap = cv2.VideoCapture('../../data/line_trace/bacho/WIN_20230401_16_16_01_Pro.mp4')
 # Check if camera opened successfully
