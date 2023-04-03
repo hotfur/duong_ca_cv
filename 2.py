@@ -36,15 +36,16 @@ def lane_making(img):
     edges = torch.squeeze(edges).cpu().numpy().astype(np.uint8)*255
     bw = thresh_result.bool()
     all_highlighted_area = torch.sum(bw)
-    lines = cv2.HoughLines(edges, 1, np.pi / 90, 50, None, 0, 0)
+    lines = cv2.HoughLines(edges, 1, np.pi / 60, 50, None, 0, 0)
+    if lines is None: return
     searched_lines = set()
     h, w = bw.shape
     master_q = queue.PriorityQueue()
-    for line1_indx in range(min(10, len(lines))):
+    for line1_indx in range(min(12, len(lines))):
         aux_q = queue.PriorityQueue()
         line1 = lines[line1_indx]
         searched_lines.add(line1_indx)
-        for line2_indx in range(min(10, len(lines))):
+        for line2_indx in range(min(12, len(lines))):
             line2 = lines[line2_indx]
             if line2_indx not in searched_lines:
                 line_area = np.zeros((h, w), dtype=np.int16)
@@ -110,7 +111,7 @@ def lane_making(img):
     cv2.imshow('edges', img)
     return
 # Create a VideoCapture object and read from input file
-cap = cv2.VideoCapture('../../data/line_trace/bacho/congthanh_solution.mp4')
+cap = cv2.VideoCapture('../../data/line_trace/bacho/WIN_20230401_16_16_01_Pro.mp4')
 # Check if camera opened successfully
 if not cap.isOpened():
     print("Error opening video file")
