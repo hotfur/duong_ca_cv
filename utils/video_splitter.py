@@ -32,7 +32,7 @@ if __name__ == "__main__":
     # root directory of repo for relative path specification.
     root = Path(__file__).parent.absolute()
     # Set path to the images
-    videos_path = root.joinpath("../videos/")
+    videos_path = root.joinpath("../../../data/line_trace/bacho")
     videos = videos_path.glob('*.mp4')
     with ThreadPoolExecutor() as executor:
         for fname in videos:
