@@ -60,7 +60,7 @@ def mid_line(left_line, right_line, err=0.0001):
 def lane_making(img):
     arr = np.array(img)
     arr[:, 0], arr[:, -1] = arr[:, -1], arr[:, 0]
-    x_rgb = torch.tensor(arr, device=device).unsqueeze(0) / 255
+    x_rgb = torch.tensor(arr, dtype=torch.half, device=device).unsqueeze(0) / 255
     x_rgb = torch.transpose(x_rgb, dim0=0, dim1=-1)[..., 0]
     x_rgb = x_rgb.unsqueeze(0)
     # Convert to Lab colorspace
@@ -81,7 +81,7 @@ def lane_making(img):
     contours = contours[0] if len(contours) == 2 else contours[1]
     # Defensive programming
     if len(contours) == 0:
-        return
+        return None, None
     # Filter contours by area and number of vertices
     contours_and_weights = []
     i = 0
@@ -98,8 +98,8 @@ def lane_making(img):
         moment = np.power(contours_and_weights[cnt][0], cv2.HuMoments(cv2.moments(contour))[0])
         contours.append((moment, cnt, contour))
     # Defensive programming
-    if len(contours) == 0:
-        return
+    if len(contours) < 2:
+        return None, None
     lines = []
     # Take only the two best contours as line.
     contours.sort(reverse=True)
@@ -119,17 +119,20 @@ def lane_making(img):
 cap = cv2.VideoCapture('../../data/line_trace/bacho/congthanh_solution.mp4')
 if not cap.isOpened():
     print("Error opening video file")
-output = cv2.VideoWriter("output.avi", cv2.VideoWriter_fourcc(*'MJPG'), 10, (int(cap.get(3)), int(cap.get(4))))
+output = cv2.VideoWriter("output.avi", cv2.VideoWriter_fourcc(*'MJPG'), 20, (int(cap.get(3)), int(cap.get(4))))
 num_frame = 0
 while cap.isOpened():
     ret, frame = cap.read()
     if not ret:
         break
-    if num_frame % 3 == 0:
-        _left_line, _right_line = lane_making(frame)
-        _mid_line = mid_line(_left_line, _right_line)
+    if num_frame % 4 == 0:
         # Just to prevent overflow
         num_frame = 0
+        _left_line, _right_line = lane_making(frame)
+        if _left_line is None:
+            output.write(frame)
+            continue
+        _mid_line = mid_line(_left_line, _right_line)
     num_frame += 1
 
     cv2.line(frame, _left_line[0], _left_line[1], line_color, 2)
