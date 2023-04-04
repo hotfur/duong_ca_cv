@@ -34,6 +34,7 @@ def lane_making(img):
     bw = torch.squeeze(thresh_result).cpu().numpy().astype(np.uint8)*255
     contours = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     contours = contours[0] if len(contours) == 2 else contours[1]
+    if len(contours) == 0: return
     contours_and_weights = []
     i = 0
     for cnt in contours:
@@ -49,8 +50,8 @@ def lane_making(img):
     for cnt in contours:
         rows, cols = img.shape[:2]
         [vx, vy, x, y] = cv2.fitLine(cnt, cv2.DIST_L2, 0, 0.01, 0.01)
-        lefty = int((-x * vy / vx) + y)
-        righty = int(((cols - x) * vy / vx) + y)
+        lefty = int(np.clip((-x * vy / vx) + y, -10000, 10000))
+        righty = int(np.clip(((cols - x) * vy / vx) + y, -10000, 10000))
         cv2.line(img, (cols - 1, righty), (0, lefty), (0, 255, 0), 2)
     # cv2.imshow('edges', img)
     return img
