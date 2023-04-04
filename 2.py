@@ -4,45 +4,14 @@ import math
 import numpy as np
 import torch
 import kornia as K
-import queue
-from concurrent.futures import ThreadPoolExecutor
 # Global constant
 color_distance_threshold = 8
-num_lines = 12 # CPU consumption
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 # Line color
 line_color = (100,0,255)
 direction_line_color = (255,100,0)
 text_location = (50,100)
 err = 0.0001
-def find_best_lines(master_q,lines, line1_indx, shape, bw, all_highlighted_area):
-    h, w = shape
-    aux_q = queue.PriorityQueue()
-    line1 = lines[line1_indx]
-    for line2_indx in range(min(num_lines, len(lines))):
-        line2 = lines[line2_indx]
-        line_area = np.zeros((h, w), dtype=np.int16)
-        pt11 = (int(line1[0][0] / np.cos(line1[0][1])), 0)
-        pt12 = (int((line1[0][0] - (h - 1) * np.sin(line1[0][1])) / np.cos(line1[0][1])), h - 1)
-        pt21 = (int(line2[0][0] / np.cos(line2[0][1])), 0)
-        pt22 = (int((line2[0][0] - (h - 1) * np.sin(line2[0][1])) / np.cos(line2[0][1])), h - 1)
-        pts = np.array([pt11, pt12, pt21, pt22])
-        cv2.fillPoly(line_area, [pts], color=1)
-        line_area = torch.tensor(line_area, device=device).bool()
-        true_area = torch.sum(torch.logical_and(line_area, bw))
-        good = true_area / torch.sum(line_area)
-        significant = true_area / all_highlighted_area
-        if good > 0.5 and significant > 0.05:
-            try:
-                aux_q.put((1 - significant, line1, line2))
-            except:
-                continue
-    if not aux_q.empty():
-        try:
-            best_pair = aux_q.get()
-            master_q.put(best_pair)
-        except:
-            return
 
 def lane_making(img):
     arr = np.array(img)
@@ -62,26 +31,31 @@ def lane_making(img):
     color_thresh = color_dist < color_distance_threshold
     mixture = torch.logical_and(color_thresh, lightning)
     thresh_result = torch.where(mixture, 1.0, 0.0)
-    # # Applying the Canny Edge filter
-    # _, edges = K.filters.canny(thresh_result[None,None,...], 0.01, 0.99)
-    # edges = torch.squeeze(edges).cpu().numpy().astype(np.uint8)*255
     bw = torch.squeeze(thresh_result).cpu().numpy().astype(np.uint8)*255
     contours = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     contours = contours[0] if len(contours) == 2 else contours[1]
     contours_and_weights = []
     i = 0
     for cnt in contours:
-        contours_and_weights.append((cv2.contourArea(cnt), i, cnt))
+        area = cv2.contourArea(cnt)
+        if area > 0:
+            contours_and_weights.append((area/len(cnt), i, cnt))
         i+=1
     contours_and_weights.sort(reverse=True)
     contours = []
-    for cnt in range(4):
+    for cnt in range(min(2, len(contours_and_weights))):
         contours.append(contours_and_weights[cnt][2])
     cv2.drawContours(img, contours, -1, (0, 255, 0), 3)
+    for cnt in contours:
+        rows, cols = img.shape[:2]
+        [vx, vy, x, y] = cv2.fitLine(cnt, cv2.DIST_L2, 0, 0.01, 0.01)
+        lefty = int((-x * vy / vx) + y)
+        righty = int(((cols - x) * vy / vx) + y)
+        cv2.line(img, (cols - 1, righty), (0, lefty), (0, 255, 0), 2)
     cv2.imshow('edges', img)
     return img
 # Create a VideoCapture object and read from input file
-cap = cv2.VideoCapture('../../data/line_trace/bacho/WIN_20230401_16_16_01_Pro.mp4')
+cap = cv2.VideoCapture('../../data/line_trace/bacho/WIN_20230401_16_35_33_Pro.mp4')
 # Check if camera opened successfully
 if not cap.isOpened():
     print("Error opening video file")
