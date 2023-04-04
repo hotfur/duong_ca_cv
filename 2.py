@@ -52,14 +52,15 @@ def lane_making(img):
         lefty = int((-x * vy / vx) + y)
         righty = int(((cols - x) * vy / vx) + y)
         cv2.line(img, (cols - 1, righty), (0, lefty), (0, 255, 0), 2)
-    cv2.imshow('edges', img)
+    # cv2.imshow('edges', img)
     return img
 # Create a VideoCapture object and read from input file
-cap = cv2.VideoCapture('../../data/line_trace/bacho/WIN_20230401_16_35_33_Pro.mp4')
+cap = cv2.VideoCapture('../../data/line_trace/bacho/congthanh_solution.mp4')
 # Check if camera opened successfully
 if not cap.isOpened():
     print("Error opening video file")
 # Read until video is completed
+output = cv2.VideoWriter("output.avi", cv2.VideoWriter_fourcc(*'MJPG'), 10, (int(cap.get(3)), int(cap.get(4))))
 while cap.isOpened():
     # Capture frame-by-frame
     ret, frame = cap.read()
@@ -67,7 +68,8 @@ while cap.isOpened():
         break
     if cv2.waitKey(25) & 0xFF == ord('q'):
         break
-    lane_making(frame)
+    processed=lane_making(frame)
+    output.write(processed)
 # When everything done, release the video capture object & Closes all the frames
 cap.release()
 cv2.destroyAllWindows()
