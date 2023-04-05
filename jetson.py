@@ -10,9 +10,9 @@ color_distance_threshold = 8
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 skip_frames = 3
 learning_rate = 0.2
-pixel_to_mm = 1
-robot_height = 100
-robot_wide = 100
+pixel_to_mm = 3.285521454
+robot_height = 215
+robot_wide = 300
 # Line color
 line_color = (255, 100, 0)
 direction_line_color = (100, 0, 255)
@@ -48,7 +48,7 @@ def find_ax_by_c(x1, y1, x2, y2):
     return a, b
 
 def calc_distance(pixel):
-    return np.sqrt(robot_wide^2 + robot_height^2 + (pixel*pixel_to_mm)^2)
+    return np.sqrt(robot_wide**2 + robot_height**2 + (pixel*pixel_to_mm)**2)
 
 def mid_line(left_line, right_line, err=0.0001):
     ptl1, ptl2 = left_line[0], left_line[1]
@@ -157,7 +157,7 @@ def lane_making(img):
 
 
 # Create a VideoCapture object and read from input file
-cap = cv2.VideoCapture('../../data/line_trace/bacho/WIN_20230401_16_14_18_Pro.mp4')
+cap = cv2.VideoCapture(0)
 # Check if camera opened successfully
 if not cap.isOpened():
     print("Error opening video file")
@@ -169,13 +169,15 @@ angle, speed_feedback = 0, 0
 while cap.isOpened():
     # Capture frame-by-frame
     ret, frame = cap.read()
+    if num_frame == 1000:
+        break
     if not ret:
         break
     # Too much computing power for undistort, so use only on PC
     # frame = undistort(frame)
     if num_frame % skip_frames == 0:
         # Just to prevent overflow
-        num_frame = 0
+        # num_frame = 0
         _lanes = lane_making(frame)
         if _lanes is not None:
             _left_line, _right_line = _lanes
@@ -193,7 +195,7 @@ while cap.isOpened():
     cv2.putText(frame, 'speed_feedback: ' + str(round(speed_feedback, 3)), text_location1, font, 1, line_color, 1, cv2.LINE_AA)
     cv2.putText(frame, 'angle: ' + str(round(np.rad2deg(angle), 3)), text_location2, font, 1, line_color, 1, cv2.LINE_AA)
     cv2.putText(frame, 'camera_axis_to_mid: ' + str(camera_axis_to_mid), text_location3, font, 1, line_color, 1, cv2.LINE_AA)
-    cv2.putText(frame, 'camera_to_mid: ' + str(round(calc_distance(camera_axis_to_mid), 3)), text_location4, font, 1, line_color, 1, cv2.LINE_AA)
+    cv2.putText(frame, 'camera_axis_to_mid: ' + str(round(calc_distance(camera_axis_to_mid), 3)), text_location4, font, 1, line_color, 1, cv2.LINE_AA)
     cv2.circle(frame, (w//2, h), 5, direction_line_color, -1)
     output.write(frame)
 
