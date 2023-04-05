@@ -178,12 +178,12 @@ while cap.isOpened():
             a_mid, b_mid = _mid_line[2]
             camera_axis_to_mid = np.clip(w // 2 - _mid_line[0][0], -w // 2, w // 2)
             angle = (angle + learning_rate * np.clip(a_mid, -np.pi/4, np.pi/4)) / (1 + learning_rate)
-            speed_feedback = (speed_feedback + learning_rate * abs(round(w / np.clip(w // 2 - _mid_line[1][0], -w // 2, w // 2), 3))) / (1 + learning_rate)
+            speed_feedback = (speed_feedback + learning_rate * abs(1 / np.clip(0.5 - _mid_line[1][0]/w, -0.5, 0.5))) / (1 + learning_rate)
     num_frame += 1
     cv2.line(frame, _left_line[0], _left_line[1], line_color, 3)
     cv2.line(frame, _right_line[0], _right_line[1], line_color, 3)
     cv2.line(frame, _mid_line[0], _mid_line[1], direction_line_color, 3)
-    cv2.putText(frame, 'speed_feedback: ' + str(speed_feedback), text_location1, font, 1, line_color, 1, cv2.LINE_AA)
+    cv2.putText(frame, 'speed_feedback: ' + str(round(speed_feedback, 3)), text_location1, font, 1, line_color, 1, cv2.LINE_AA)
     cv2.putText(frame, 'camera_axis_to_mid: ' + str(camera_axis_to_mid), text_location2, font, 1, line_color, 1, cv2.LINE_AA)
     cv2.putText(frame, 'angle: ' + str(round(np.rad2deg(angle), 3)), text_location3, font, 1, line_color, 1, cv2.LINE_AA)
     cv2.circle(frame, (w//2, h), 5, direction_line_color, -1)
