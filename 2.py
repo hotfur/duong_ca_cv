@@ -3,54 +3,27 @@ import cv2
 import numpy as np
 import torch
 import kornia as K
-import yaml
-
 # Global constant
 color_distance_threshold = 8
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-skip_frames = 3
-learning_rate = 0.2
 # Line color
-line_color = (255, 100, 0)
-direction_line_color = (100, 0, 255)
-text_location1 = (50, 130)
-text_location2 = (50, 160)
-text_location3 = (50, 190)
-font = cv2.FONT_HERSHEY_SIMPLEX
+line_color = (255,100,0)
+direction_line_color = (100,0,255)
+text_location = (50,100)
 err = 0.0001
-# Camera matrix
-yaml_file = "cam3.yaml"
-
-
-def undistort(img):
-    with open(yaml_file, "r") as f:
-        data = yaml.load(f, Loader = yaml.loader.SafeLoader)
-        mtx=np.array(data['camera_matrix'])
-        dist=np.array(data['dist_coeff'])
-    h, w = img.shape[0], img.shape[1]
-    # Refining the camera matrix using parameters obtained by calibration
-    newcameramtx, roi = cv2.getOptimalNewCameraMatrix(mtx, dist, (w,h), 1, (w,h))
-    # Method 1 to undistort the image
-    dst = cv2.undistort(img, mtx, dist, None, newcameramtx)
-    # # Method 2 to undistort the image
-    # mapx, mapy = cv2.initUndistortRectifyMap(mtx,dist,None,newcameramtx,(w,h),5)
-    # dst = cv2.remap(img,mapx,mapy,cv2.INTER_LINEAR)
-    return dst
-
-
-def find_ax_by_c(x1, y1, x2, y2):
-    a = (y1 - y2) / (x1 - x2 + err)
-    b = y1 - x1 * a
-    return a, b
 
 
 def mid_line(left_line, right_line, err=0.0001):
     ptl1, ptl2 = left_line[0], left_line[1]
     ptr1, ptr2 = right_line[0], right_line[1]
+    y_l1, x_l1 = ptl1
+    y_l2, x_l2 = ptl2
+    y_r1, x_r1 = ptr1
+    y_r2, x_r2 = ptr2
 
     # calculate the center line
-    a_l, b_l = find_ax_by_c(ptl1[1], ptl1[0], ptl2[1], ptl2[0])
-    a_r, b_r = find_ax_by_c(ptr1[1], ptr1[0], ptr2[1], ptr2[0])
+    a_l, a_r = (y_l1 - y_l2) / (x_l1 - x_l2 + err), (y_r1 - y_r2) / (x_r1 - x_r2 + err)
+    b_l, b_r = y_l1 - x_l1 * a_l, y_r1 - x_r1 * a_r
 
     # get intersect point
     x_inter = (b_r - b_l) / (a_l - a_r + err)
@@ -78,24 +51,16 @@ def mid_line(left_line, right_line, err=0.0001):
     # return mid_line
     if x_mr1 > x_inter:
         x_mid, y_mid = (x_ml + x_mr1) / 2, (y_ml + y_mr1) / 2
-        a_mid, b_mid = find_ax_by_c(x_mid, y_mid, x_inter, y_inter)
     else:
         x_mid, y_mid = (x_ml + x_mr2) / 2, (y_ml + y_mr2) / 2
-        a_mid, b_mid = find_ax_by_c(x_mid, y_mid, x_inter, y_inter)
 
-    x_mid_lower = 720
-    y_mid_lower = a_mid * x_mid_lower + b_mid
-
-    x_mid_upper = 0
-    y_mid_upper = b_mid
-
-    return (int(y_mid_lower), int(x_mid_lower)), (int(y_mid_upper), int(x_mid_upper)), (a_mid, b_mid)
+    return ((int(y_inter), int(x_inter)), (int(y_mid), int(x_mid)))
 
 
 def lane_making(img):
     arr = np.array(img)
     arr[:, 0], arr[:, -1] = arr[:, -1], arr[:, 0]
-    x_rgb = torch.tensor(arr, device=device).unsqueeze(0) / 255
+    x_rgb = torch.tensor(arr, dtype=torch.half, device=device).unsqueeze(0) / 255
     x_rgb = torch.transpose(x_rgb, dim0=0, dim1=-1)[..., 0]
     x_rgb = x_rgb.unsqueeze(0)
     # Convert to Lab colorspace
@@ -115,8 +80,8 @@ def lane_making(img):
     contours = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_TC89_KCOS)
     contours = contours[0] if len(contours) == 2 else contours[1]
     # Defensive programming
-    if len(contours) < 2:
-        return None
+    if len(contours) == 0:
+        return None, None
     # Filter contours by area and number of vertices
     contours_and_weights = []
     i = 0
@@ -134,7 +99,7 @@ def lane_making(img):
         contours.append((moment, cnt, contour))
     # Defensive programming
     if len(contours) < 2:
-        return None
+        return None, None
     lines = []
     # Take only the two best contours as line.
     contours.sort(reverse=True)
@@ -143,50 +108,36 @@ def lane_making(img):
     for moment, i, cnt in contours:
         rows, cols = img.shape[:2]
         [vx, vy, x, y] = cv2.fitLine(cnt, cv2.DIST_L2, 0, 0.01, 0.01)
-        lefty = int(np.clip((-x * vy / vx) + y, -10000, 10000))
-        righty = int(np.clip(((cols - x) * vy / vx) + y, -10000, 10000))
+        lefty = int(np.clip((-x * vy / vx) + y, -1/err, 1/err))
+        righty = int(np.clip(((cols - x) * vy / vx) + y, -1/err, 1/err))
         lines.append((cols - 1, righty))
         lines.append((0, lefty))
     return (lines[0], lines[1]), (lines[2], lines[3])
 
 
 # Create a VideoCapture object and read from input file
-cap = cv2.VideoCapture('../../data/line_trace/bacho/WIN_20230401_16_14_18_Pro.mp4')
-# Check if camera opened successfully
+cap = cv2.VideoCapture('../../data/line_trace/bacho/congthanh_solution.mp4')
 if not cap.isOpened():
     print("Error opening video file")
-# Read until video is completed
-w, h = int(cap.get(3)), int(cap.get(4))
-output = cv2.VideoWriter("output.avi", cv2.VideoWriter_fourcc(*'MJPG'), 20, (w, h))
+output = cv2.VideoWriter("output.avi", cv2.VideoWriter_fourcc(*'MJPG'), 20, (int(cap.get(3)), int(cap.get(4))))
 num_frame = 0
-angle, speed_feedback = 0, 0
 while cap.isOpened():
-    # Capture frame-by-frame
     ret, frame = cap.read()
     if not ret:
         break
-    # Too much computing power for undistort, so use only on PC
-    # frame = undistort(frame)
-    if num_frame % skip_frames == 0:
+    if num_frame % 4 == 0:
         # Just to prevent overflow
         num_frame = 0
-        _lanes = lane_making(frame)
-        if _lanes is not None:
-            _left_line, _right_line = _lanes
-            _mid_line = mid_line(_left_line, _right_line)
-            # distance midline & mid of image
-            a_mid, b_mid = _mid_line[2]
-            camera_axis_to_mid = np.clip(w // 2 - _mid_line[0][0], -w // 2, w // 2)
-            angle = (angle + learning_rate * np.clip(a_mid, -np.pi/4, np.pi/4)) / (1 + learning_rate)
-            speed_feedback = (speed_feedback + learning_rate * abs(round(w / np.clip(w // 2 - _mid_line[1][0], -w // 2, w // 2), 3))) / (1 + learning_rate)
+        _left_line, _right_line = lane_making(frame)
+        if _left_line is None:
+            output.write(frame)
+            continue
+        _mid_line = mid_line(_left_line, _right_line)
     num_frame += 1
-    cv2.line(frame, _left_line[0], _left_line[1], line_color, 3)
-    cv2.line(frame, _right_line[0], _right_line[1], line_color, 3)
-    cv2.line(frame, _mid_line[0], _mid_line[1], direction_line_color, 3)
-    cv2.putText(frame, 'speed_feedback: ' + str(speed_feedback), text_location1, font, 1, line_color, 1, cv2.LINE_AA)
-    cv2.putText(frame, 'camera_axis_to_mid: ' + str(camera_axis_to_mid), text_location2, font, 1, line_color, 1, cv2.LINE_AA)
-    cv2.putText(frame, 'angle: ' + str(round(np.rad2deg(angle), 3)), text_location3, font, 1, line_color, 1, cv2.LINE_AA)
-    cv2.circle(frame, (w//2, h), 5, direction_line_color, -1)
+
+    cv2.line(frame, _left_line[0], _left_line[1], line_color, 2)
+    cv2.line(frame, _right_line[0], _right_line[1], line_color, 2)
+    cv2.line(frame, _mid_line[0], _mid_line[1], direction_line_color, 2)
     output.write(frame)
 
 # When everything done, release the video capture object & Closes all the frames
