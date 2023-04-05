@@ -1,17 +1,61 @@
 # importing libraries
 import cv2
-import kornia as K
 import numpy as np
 import torch
+import kornia as K
 
 # Global constant
 color_distance_threshold = 8
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 # Line color
-line_color = (100, 0, 255)
-direction_line_color = (255, 100, 0)
-text_location = (50, 100)
+line_color = (255, 100, 0)
+direction_line_color = (100, 0, 255)
+text_location1 = (50, 100)
+text_location2 = (50, 150)
+font = cv2.FONT_HERSHEY_SIMPLEX
 err = 0.0001
+
+
+def find_ax_by_c(x1, y1, x2, y2):
+    a = (y1 - y2) / (x1 - x2 + err)
+    b = y1 - x1 * a
+    return a, b
+
+
+def mid_line(left_line, right_line):
+    ptl1, ptl2 = left_line[0], left_line[1]
+    ptr1, ptr2 = right_line[0], right_line[1]
+    # calculate the center line
+    a_l, b_l = find_ax_by_c(ptl1[1], ptl1[0], ptl2[1], ptl2[0])
+    a_r, b_r = find_ax_by_c(ptr1[1], ptr1[0], ptr2[1], ptr2[0])
+    # get intersect point
+    x_inter = (b_r - b_l) / (a_l - a_r + err)
+    y_inter = x_inter * a_l + b_l
+    # get mid_point left
+    x_ml = x_inter + 1 / err
+    y_ml = x_ml * a_l + b_l
+    d_2 = np.square(y_inter - y_ml) + np.square(x_inter - x_ml)
+    # get mid_point right
+    # delta = b^2 - 4ac
+    a_mr = np.square(a_r) + 1
+    b_mr = -2 * (x_inter + y_inter * a_r - a_r * b_r)
+    c_mr = -(d_2 - np.square(x_inter) - np.square(y_inter) + 2 * y_inter * b_r - np.square(b_r))
+    delta = np.square(b_mr) - 4 * a_mr * c_mr
+    # get x_mid_right and y_mid_right
+    x_mr1 = (-b_mr - np.sqrt(delta)) / (2 * a_mr + err)
+    x_mr2 = (-b_mr + np.sqrt(delta)) / (2 * a_mr + err)
+    y_mr1 = a_r * x_mr1 + b_r
+    y_mr2 = a_r * x_mr2 + b_r
+    # return mid_line
+    if x_mr1 > x_inter:
+        x_mid, y_mid = (x_ml + x_mr1) / 2, (y_ml + y_mr1) / 2
+        a_mid, b_mid = find_ax_by_c(x_mid, y_mid, x_inter, y_inter)
+    else:
+        x_mid, y_mid = (x_ml + x_mr2) / 2, (y_ml + y_mr2) / 2
+        a_mid, b_mid = find_ax_by_c(x_mid, y_mid, x_inter, y_inter)
+    x_mid = 720
+    y_mid = a_mid * x_mid + b_mid
+    return (int(y_inter), int(x_inter)), (int(y_mid), int(x_mid)), (a_mid, b_mid)
 
 
 def lane_making(img):
@@ -37,8 +81,8 @@ def lane_making(img):
     contours = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_TC89_KCOS)
     contours = contours[0] if len(contours) == 2 else contours[1]
     # Defensive programming
-    if len(contours) == 0:
-        return
+    if len(contours) < 2:
+        return None
     # Filter contours by area and number of vertices
     contours_and_weights = []
     i = 0
@@ -55,8 +99,9 @@ def lane_making(img):
         moment = np.power(contours_and_weights[cnt][0], cv2.HuMoments(cv2.moments(contour))[0])
         contours.append((moment, cnt, contour))
     # Defensive programming
-    if len(contours) == 0:
-        return
+    if len(contours) < 2:
+        return None
+    lines = []
     # Take only the two best contours as line.
     contours.sort(reverse=True)
     contours = contours[:2]
@@ -66,24 +111,45 @@ def lane_making(img):
         [vx, vy, x, y] = cv2.fitLine(cnt, cv2.DIST_L2, 0, 0.01, 0.01)
         lefty = int(np.clip((-x * vy / vx) + y, -10000, 10000))
         righty = int(np.clip(((cols - x) * vy / vx) + y, -10000, 10000))
-        cv2.line(img, (cols - 1, righty), (0, lefty), line_color, 2)
-        cv2.drawContours(img, [cnt], 0, line_color, 3)
-    # cv2.drawContours(img, contours, -1, line_color, 3)
-    return img
+        lines.append((cols - 1, righty))
+        lines.append((0, lefty))
+    return (lines[0], lines[1]), (lines[2], lines[3])
 
 
-cap = cv2.VideoCapture('../../data/line_trace/bacho/WIN_20230401_16_15_08_Pro.mp4')
-# For Jetson Nano
-# cap = cv2.VideoCapture('congthanh_solution.mp4')
+# Create a VideoCapture object and read from input file
+cap = cv2.VideoCapture('../../data/line_trace/bacho/congthanh_solution.mp4')
+# Check if camera opened successfully
 if not cap.isOpened():
     print("Error opening video file")
-output = cv2.VideoWriter("output.avi", cv2.VideoWriter_fourcc(*'MJPG'), 10, (int(cap.get(3)), int(cap.get(4))))
+# Read until video is completed
+w, h = int(cap.get(3)), int(cap.get(4))
+output = cv2.VideoWriter("output.avi", cv2.VideoWriter_fourcc(*'MJPG'), 20, (w, h))
+num_frame = 0
 while cap.isOpened():
+    # Capture frame-by-frame
     ret, frame = cap.read()
     if not ret:
         break
-    processed = lane_making(frame)
-    output.write(processed)
-# When everything done, release the video capture object
+    if num_frame % 4 == 0:
+        # Just to prevent overflow
+        num_frame = 0
+        _lanes = lane_making(frame)
+        if _lanes is not None:
+            _left_line, _right_line = _lanes
+            _mid_line = mid_line(_left_line, _right_line)
+            # distance midline & mid of image
+            a_mid, b_mid = _mid_line[2]
+            distance_mid = np.clip(w // 2 - _mid_line[1][0], -w // 2, w // 2)
+            angle = np.clip(int(np.rad2deg(a_mid)), -89, 91)
+    num_frame += 1
+    cv2.line(frame, _left_line[0], _left_line[1], line_color, 3)
+    cv2.line(frame, _right_line[0], _right_line[1], line_color, 3)
+    cv2.line(frame, _mid_line[0], _mid_line[1], direction_line_color, 3)
+    cv2.putText(frame, 'd: ' + str(distance_mid), text_location1, font, 1, line_color, 1, cv2.LINE_AA)
+    cv2.putText(frame, 'angle: ' + str(angle), text_location2, font, 1, line_color, 1, cv2.LINE_AA)
+    cv2.circle(frame, (w//2, h), 5, direction_line_color, -1)
+    output.write(frame)
+
+# When everything done, release the video capture object & Closes all the frames
 cap.release()
 output.release()
