@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 import torch
 import kornia as K
+import yaml
 
 # Global constant
 color_distance_threshold = 8
@@ -14,7 +15,24 @@ text_location1 = (50, 100)
 text_location2 = (50, 150)
 font = cv2.FONT_HERSHEY_SIMPLEX
 err = 0.0001
+# Camera matrix
+yaml_file = "cam3.yaml"
 
+
+def undistort(img):
+    with open(yaml_file, "r") as f:
+        data = yaml.load(f, Loader = yaml.loader.SafeLoader)
+        mtx=np.array(data['camera_matrix'])
+        dist=np.array(data['dist_coeff'])
+    h, w = img.shape[0], img.shape[1]
+    # Refining the camera matrix using parameters obtained by calibration
+    newcameramtx, roi = cv2.getOptimalNewCameraMatrix(mtx, dist, (w,h), 1, (w,h))
+    # Method 1 to undistort the image
+    dst = cv2.undistort(img, mtx, dist, None, newcameramtx)
+    # # Method 2 to undistort the image
+    # mapx, mapy = cv2.initUndistortRectifyMap(mtx,dist,None,newcameramtx,(w,h),5)
+    # dst = cv2.remap(img,mapx,mapy,cv2.INTER_LINEAR)
+    return dst
 
 def find_ax_by_c(x1, y1, x2, y2):
     a = (y1 - y2) / (x1 - x2 + err)
@@ -117,7 +135,7 @@ def lane_making(img):
 
 
 # Create a VideoCapture object and read from input file
-cap = cv2.VideoCapture('../../data/line_trace/bacho/congthanh_solution.mp4')
+cap = cv2.VideoCapture('../../data/line_trace/bacho/WIN_20230401_16_14_18_Pro.mp4')
 # Check if camera opened successfully
 if not cap.isOpened():
     print("Error opening video file")
@@ -130,6 +148,8 @@ while cap.isOpened():
     ret, frame = cap.read()
     if not ret:
         break
+    # Too much computing power for undistort, so use only on PC
+    # frame = undistort(frame)
     if num_frame % 4 == 0:
         # Just to prevent overflow
         num_frame = 0
