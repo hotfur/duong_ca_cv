@@ -8,11 +8,14 @@ import yaml
 # Global constant
 color_distance_threshold = 8
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+skip_frames = 3
+learning_rate = 0.2
 # Line color
 line_color = (255, 100, 0)
 direction_line_color = (100, 0, 255)
-text_location1 = (50, 100)
-text_location2 = (50, 150)
+text_location1 = (50, 130)
+text_location2 = (50, 160)
+text_location3 = (50, 190)
 font = cv2.FONT_HERSHEY_SIMPLEX
 err = 0.0001
 # Camera matrix
@@ -34,36 +37,44 @@ def undistort(img):
     # dst = cv2.remap(img,mapx,mapy,cv2.INTER_LINEAR)
     return dst
 
+
 def find_ax_by_c(x1, y1, x2, y2):
     a = (y1 - y2) / (x1 - x2 + err)
     b = y1 - x1 * a
     return a, b
 
 
-def mid_line(left_line, right_line):
+def mid_line(left_line, right_line, err=0.0001):
     ptl1, ptl2 = left_line[0], left_line[1]
     ptr1, ptr2 = right_line[0], right_line[1]
+
     # calculate the center line
     a_l, b_l = find_ax_by_c(ptl1[1], ptl1[0], ptl2[1], ptl2[0])
     a_r, b_r = find_ax_by_c(ptr1[1], ptr1[0], ptr2[1], ptr2[0])
+
     # get intersect point
     x_inter = (b_r - b_l) / (a_l - a_r + err)
     y_inter = x_inter * a_l + b_l
+
     # get mid_point left
     x_ml = x_inter + 1 / err
     y_ml = x_ml * a_l + b_l
     d_2 = np.square(y_inter - y_ml) + np.square(x_inter - x_ml)
+
     # get mid_point right
     # delta = b^2 - 4ac
     a_mr = np.square(a_r) + 1
     b_mr = -2 * (x_inter + y_inter * a_r - a_r * b_r)
     c_mr = -(d_2 - np.square(x_inter) - np.square(y_inter) + 2 * y_inter * b_r - np.square(b_r))
     delta = np.square(b_mr) - 4 * a_mr * c_mr
+
     # get x_mid_right and y_mid_right
     x_mr1 = (-b_mr - np.sqrt(delta)) / (2 * a_mr + err)
     x_mr2 = (-b_mr + np.sqrt(delta)) / (2 * a_mr + err)
+
     y_mr1 = a_r * x_mr1 + b_r
     y_mr2 = a_r * x_mr2 + b_r
+
     # return mid_line
     if x_mr1 > x_inter:
         x_mid, y_mid = (x_ml + x_mr1) / 2, (y_ml + y_mr1) / 2
@@ -71,9 +82,14 @@ def mid_line(left_line, right_line):
     else:
         x_mid, y_mid = (x_ml + x_mr2) / 2, (y_ml + y_mr2) / 2
         a_mid, b_mid = find_ax_by_c(x_mid, y_mid, x_inter, y_inter)
-    x_mid = 720
-    y_mid = a_mid * x_mid + b_mid
-    return (int(y_inter), int(x_inter)), (int(y_mid), int(x_mid)), (a_mid, b_mid)
+
+    x_mid_lower = 720
+    y_mid_lower = a_mid * x_mid_lower + b_mid
+
+    x_mid_upper = 0
+    y_mid_upper = b_mid
+
+    return (int(y_mid_lower), int(x_mid_lower)), (int(y_mid_upper), int(x_mid_upper)), (a_mid, b_mid)
 
 
 def lane_making(img):
@@ -143,6 +159,7 @@ if not cap.isOpened():
 w, h = int(cap.get(3)), int(cap.get(4))
 output = cv2.VideoWriter("output.avi", cv2.VideoWriter_fourcc(*'MJPG'), 20, (w, h))
 num_frame = 0
+angle, speed_feedback = 0, 0
 while cap.isOpened():
     # Capture frame-by-frame
     ret, frame = cap.read()
@@ -150,7 +167,7 @@ while cap.isOpened():
         break
     # Too much computing power for undistort, so use only on PC
     # frame = undistort(frame)
-    if num_frame % 4 == 0:
+    if num_frame % skip_frames == 0:
         # Just to prevent overflow
         num_frame = 0
         _lanes = lane_making(frame)
@@ -159,14 +176,16 @@ while cap.isOpened():
             _mid_line = mid_line(_left_line, _right_line)
             # distance midline & mid of image
             a_mid, b_mid = _mid_line[2]
-            distance_mid = np.clip(w // 2 - _mid_line[1][0], -w // 2, w // 2)
-            angle = np.clip(int(np.rad2deg(a_mid)), -89, 91)
+            camera_axis_to_mid = np.clip(w // 2 - _mid_line[0][0], -w // 2, w // 2)
+            angle = (angle + learning_rate * np.clip(a_mid, -np.pi/4, np.pi/4)) / (1 + learning_rate)
+            speed_feedback = (speed_feedback + learning_rate * abs(round(w / np.clip(w // 2 - _mid_line[1][0], -w // 2, w // 2), 3))) / (1 + learning_rate)
     num_frame += 1
     cv2.line(frame, _left_line[0], _left_line[1], line_color, 3)
     cv2.line(frame, _right_line[0], _right_line[1], line_color, 3)
     cv2.line(frame, _mid_line[0], _mid_line[1], direction_line_color, 3)
-    cv2.putText(frame, 'd: ' + str(distance_mid), text_location1, font, 1, line_color, 1, cv2.LINE_AA)
-    cv2.putText(frame, 'angle: ' + str(angle), text_location2, font, 1, line_color, 1, cv2.LINE_AA)
+    cv2.putText(frame, 'speed_feedback: ' + str(speed_feedback), text_location1, font, 1, line_color, 1, cv2.LINE_AA)
+    cv2.putText(frame, 'camera_axis_to_mid: ' + str(camera_axis_to_mid), text_location2, font, 1, line_color, 1, cv2.LINE_AA)
+    cv2.putText(frame, 'angle: ' + str(round(np.rad2deg(angle), 3)), text_location3, font, 1, line_color, 1, cv2.LINE_AA)
     cv2.circle(frame, (w//2, h), 5, direction_line_color, -1)
     output.write(frame)
 
