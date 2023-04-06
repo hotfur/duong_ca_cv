@@ -8,8 +8,10 @@ import yaml
 # Global constant
 color_distance_threshold = 8
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-skip_frames = 3
-learning_rate = 0.2
+skip_frames = 3 # only process 1 frame per this number of skip frame to save resource
+learning_rate_angle = 0.2 # Learning rate for angle feedback
+learning_rate_speed = 0.4 # Learning rate for speed feedback
+min_speed = 0.1 # minimum robot speed as fraction of highest speed
 pixel_to_mm = 3.285521454
 robot_height = 215
 robot_wide = 300
@@ -47,20 +49,17 @@ def find_ax_by_c(x1, y1, x2, y2):
     b = y1 - x1 * a
     return a, b
 
-def calc_distance(pixel):
-    return np.sqrt(robot_wide**2 + robot_height**2 + (pixel*pixel_to_mm)**2)
 
-def find_mid_dis(a_mid, b_mid, y_lower):
-    y = 640
-    x = (y-b_mid)/(a_mid + err)
-    if x < 720 and x > 0:
-        return y_lower*(robot_wide/np.abs(720-x) + 1)
+def find_mid_dis(a_mid, b_mid, y_lower, w, h):
+    x = (w//2-b_mid)/(a_mid + err)
+    if x < h and x > 0:
+        return y_lower*(robot_wide/np.abs(h-x) + 1)
     elif x < 0:
-        return y_lower*(robot_wide/np.abs(720+x) + 1)
+        return y_lower*(robot_wide/(h+np.abs(x))+1)
     else:
-        return y_lower*(robot_wide/np.abs(x-720) - 1)
+        return y_lower*(robot_wide/np.abs(x-h) - 1)
 
-def mid_line(left_line, right_line, err=0.0001):
+def mid_line(left_line, right_line, w, h):
     ptl1, ptl2 = left_line[0], left_line[1]
     ptr1, ptr2 = right_line[0], right_line[1]
 
@@ -99,13 +98,13 @@ def mid_line(left_line, right_line, err=0.0001):
         x_mid, y_mid = (x_ml + x_mr2) / 2, (y_ml + y_mr2) / 2
         a_mid, b_mid = find_ax_by_c(x_mid, y_mid, x_inter, y_inter)
 
-    x_mid_lower = 720
+    x_mid_lower = h
     y_mid_lower = a_mid * x_mid_lower + b_mid
 
     x_mid_upper = 0
     y_mid_upper = b_mid
 
-    return (int(y_mid_lower), int(x_mid_lower)), (int(y_mid_upper), int(x_mid_upper)), (a_mid, b_mid)
+    return (int(y_mid_lower), int(h)), (int(y_mid_upper), int(x_mid_upper)), (a_mid, b_mid)
 
 
 def lane_making(img):
@@ -159,8 +158,8 @@ def lane_making(img):
     for moment, i, cnt in contours:
         rows, cols = img.shape[:2]
         [vx, vy, x, y] = cv2.fitLine(cnt, cv2.DIST_L2, 0, 0.01, 0.01)
-        lefty = int(np.clip((-x * vy / vx) + y, -10000, 10000))
-        righty = int(np.clip(((cols - x) * vy / vx) + y, -10000, 10000))
+        lefty = int(np.clip((-x * vy / vx) + y, -1/err, 1/err))
+        righty = int(np.clip(((cols - x) * vy / vx) + y, -1/err, 1/err))
         lines.append((cols - 1, righty))
         lines.append((0, lefty))
     return (lines[0], lines[1]), (lines[2], lines[3])
@@ -181,26 +180,23 @@ while cap.isOpened():
     ret, frame = cap.read()
     if not ret:
         break
-    if num_frame == 3000:
-        break
     # Too much computing power for undistort, so use only on PC
     # frame = undistort(frame)
     if num_frame % skip_frames == 0:
         # Just to prevent overflow
-        # num_frame = 0
+        num_frame = 0
         _lanes = lane_making(frame)
         if _lanes is not None:
             _left_line, _right_line = _lanes
-            _mid_line = mid_line(_left_line, _right_line)
+            _mid_line = mid_line(_left_line, _right_line, w, h)
             # distance midline & mid of image
             a_mid, b_mid = _mid_line[2]
-            y_lower = 1280/2 - _mid_line[0][0]
-            dis_mid = find_mid_dis(a_mid, b_mid, y_lower)
-
+            y_lower = w//2 - _mid_line[0][0]
+            dis_mid = find_mid_dis(a_mid, b_mid, y_lower, w, h)
             camera_axis_to_mid = np.clip(w // 2 - _mid_line[0][0], -w // 2, w // 2)
-            angle = (angle + learning_rate * np.clip(a_mid, -np.pi/4, np.pi/4)) / (1 + learning_rate)
-            speed_feedback_raw = np.clip(0.5 - _mid_line[1][0]/w, -0.5, 0.5)
-            speed_feedback = (speed_feedback + learning_rate * abs(1 + np.exp(-speed_feedback_raw))) / (1 + learning_rate)
+            angle = (angle + learning_rate_angle * np.clip(a_mid, -np.pi/4, np.pi/4)) / (1 + learning_rate_angle)
+            speed_feedback_raw = 1 - abs(2 * np.clip(_mid_line[1][0]/w, min_speed, 1-min_speed) - 1)
+            speed_feedback = (speed_feedback + learning_rate_speed * speed_feedback_raw) / (1 + learning_rate_speed)
     num_frame += 1
     cv2.line(frame, _left_line[0], _left_line[1], line_color, 3)
     cv2.line(frame, _right_line[0], _right_line[1], line_color, 3)
@@ -208,7 +204,6 @@ while cap.isOpened():
     cv2.putText(frame, 'speed_feedback: ' + str(round(speed_feedback, 3)), text_location1, font, 1, line_color, 1, cv2.LINE_AA)
     cv2.putText(frame, 'angle: ' + str(round(np.rad2deg(angle), 3)), text_location2, font, 1, line_color, 1, cv2.LINE_AA)
     cv2.putText(frame, 'camera_axis_to_mid: ' + str(camera_axis_to_mid), text_location3, font, 1, line_color, 1, cv2.LINE_AA)
-    #cv2.putText(frame, 'camera_axis_to_mid: ' + str(round(calc_distance(camera_axis_to_mid), 3)), text_location4, font, 1, line_color, 1, cv2.LINE_AA)
     cv2.putText(frame, 'dis_mid: ' + str(round(dis_mid, 3)), text_location4, font, 1, line_color, 1, cv2.LINE_AA)
     cv2.circle(frame, (w//2, h), 5, direction_line_color, -1)
     output.write(frame)
