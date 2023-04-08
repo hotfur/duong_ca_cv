@@ -1,20 +1,23 @@
+"""Program to reliably detect lanes and feedback for closed loop robot control
+Author: Nguyen Hoang An, Le Thai Bach, Vuong Kha Sieu
+"""
 # importing libraries
 import cv2
-import numpy as np
 import torch
 import kornia as K
 import yaml
+import numpy as np
 
 # Global constant
 color_distance_threshold = 8
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-skip_frames = 3 # only process 1 frame per this number of skip frame to save resource
-learning_rate_angle = 0.2 # Learning rate for angle feedback
-learning_rate_speed = 0.4 # Learning rate for speed feedback
-min_speed = 0.1 # minimum robot speed as fraction of highest speed
-pixel_to_mm = 3.285521454
+skip_frames = 3  # only process 1 frame per this number of skip frame to save resource
+learning_rate_angle = 0.2  # Learning rate for angle feedback
+learning_rate_speed = 0.4  # Learning rate for speed feedback
+min_speed = 0.1  # minimum robot speed as fraction of highest speed
 robot_height = 215
 robot_wide = 300
+sensor_size = (3.58, 2.02)
 # Line color
 line_color = (255, 0, 0)
 direction_line_color = (100, 0, 255)
@@ -26,21 +29,34 @@ font = cv2.FONT_HERSHEY_SIMPLEX
 err = 0.0001
 # Camera matrix
 yaml_file = "cam3.yaml"
+# Video Source (0 for camera/Jetson)
+video_source = '../../data/line_trace/bacho/WIN_20230401_16_14_18_Pro.mp4'
+
+"""
+This method unpack yaml file containing the calibration information and return
+the mapping matrix of the distortion
+"""
 
 
-def undistort(img):
+def unpack_yaml(yaml_file, w, h):
     with open(yaml_file, "r") as f:
-        data = yaml.load(f, Loader = yaml.loader.SafeLoader)
-        mtx=np.array(data['camera_matrix'])
-        dist=np.array(data['dist_coeff'])
-    h, w = img.shape[0], img.shape[1]
-    # Refining the camera matrix using parameters obtained by calibration
-    newcameramtx, roi = cv2.getOptimalNewCameraMatrix(mtx, dist, (w,h), 1, (w,h))
-    # Method 1 to undistort the image
-    dst = cv2.undistort(img, mtx, dist, None, newcameramtx)
-    # # Method 2 to undistort the image
-    # mapx, mapy = cv2.initUndistortRectifyMap(mtx,dist,None,newcameramtx,(w,h),5)
-    # dst = cv2.remap(img,mapx,mapy,cv2.INTER_LINEAR)
+        data = yaml.load(f, Loader=yaml.loader.SafeLoader)
+        print(data)
+        mtx = np.array(data['camera_matrix'])
+        dist = np.array(data['dist_coeff'])
+    newcameramtx, roi = cv2.getOptimalNewCameraMatrix(mtx, dist, (w, h), 0, (w, h))
+    # Method 2 to undistort the image
+    mapx, mapy = cv2.initUndistortRectifyMap(mtx, dist, None, newcameramtx, (w, h), 5)
+    return mapx, mapy
+
+
+"""
+This method undistort image matrix from image as numpy array
+"""
+
+
+def undistort(img, mapx, mapy):
+    dst = cv2.remap(img, mapx, mapy, cv2.INTER_LINEAR)
     return dst
 
 
@@ -51,13 +67,14 @@ def find_ax_by_c(x1, y1, x2, y2):
 
 
 def find_mid_dis(a_mid, b_mid, y_lower, w, h):
-    x = (w//2-b_mid)/(a_mid + err)
-    if x < h and x > 0:
-        return y_lower*(robot_wide/np.abs(h-x) + 1)
+    x = (w // 2 - b_mid) / (a_mid + err)
+    if h > x > 0:
+        return y_lower * (robot_wide / np.abs(h - x) + 1)
     elif x < 0:
-        return y_lower*(robot_wide/(h+np.abs(x))+1)
+        return y_lower * (robot_wide / (h + np.abs(x)) + 1)
     else:
-        return y_lower*(robot_wide/np.abs(x-h) - 1)
+        return y_lower * (robot_wide / np.abs(x - h) - 1)
+
 
 def mid_line(left_line, right_line, w, h):
     ptl1, ptl2 = left_line[0], left_line[1]
@@ -158,15 +175,15 @@ def lane_making(img):
     for moment, i, cnt in contours:
         rows, cols = img.shape[:2]
         [vx, vy, x, y] = cv2.fitLine(cnt, cv2.DIST_L2, 0, 0.01, 0.01)
-        lefty = int(np.clip((-x * vy / vx) + y, -1/err, 1/err))
-        righty = int(np.clip(((cols - x) * vy / vx) + y, -1/err, 1/err))
+        lefty = int(np.clip((-x * vy / vx) + y, -1 / err, 1 / err))
+        righty = int(np.clip(((cols - x) * vy / vx) + y, -1 / err, 1 / err))
         lines.append((cols - 1, righty))
         lines.append((0, lefty))
     return (lines[0], lines[1]), (lines[2], lines[3])
 
 
 # Create a VideoCapture object and read from input file
-cap = cv2.VideoCapture('../../data/line_trace/bacho/WIN_20230401_16_14_18_Pro.mp4')
+cap = cv2.VideoCapture(video_source)
 # Check if camera opened successfully
 if not cap.isOpened():
     print("Error opening video file")
@@ -175,15 +192,17 @@ w, h = int(cap.get(3)), int(cap.get(4))
 output = cv2.VideoWriter("output.avi", cv2.VideoWriter_fourcc(*'MJPG'), 20, (w, h))
 num_frame = 0
 angle, speed_feedback = 0, 0
+# Read YAML calibration file
+mapx, mapy = unpack_yaml(yaml_file, w, h)
 while cap.isOpened():
     # Capture frame-by-frame
     ret, frame = cap.read()
     if not ret:
         break
-    # Too much computing power for undistort, so use only on PC
-    # frame = undistort(frame)
+    # Undistort is computational costly (1/5 interfere time), use with caution!
+    frame = undistort(frame, mapx, mapy)
     if num_frame % skip_frames == 0:
-        # Just to prevent overflow
+        # Just to prevent numerical overflow
         num_frame = 0
         _lanes = lane_making(frame)
         if _lanes is not None:
@@ -191,21 +210,24 @@ while cap.isOpened():
             _mid_line = mid_line(_left_line, _right_line, w, h)
             # distance midline & mid of image
             a_mid, b_mid = _mid_line[2]
-            y_lower = w//2 - _mid_line[0][0]
+            y_lower = w // 2 - _mid_line[0][0]
             dis_mid = find_mid_dis(a_mid, b_mid, y_lower, w, h)
             camera_axis_to_mid = np.clip(w // 2 - _mid_line[0][0], -w // 2, w // 2)
-            angle = (angle + learning_rate_angle * np.clip(a_mid, -np.pi/4, np.pi/4)) / (1 + learning_rate_angle)
-            speed_feedback_raw = 1 - abs(2 * np.clip(_mid_line[1][0]/w, min_speed, 1-min_speed) - 1)
+            angle = (angle + learning_rate_angle * np.clip(a_mid, -np.pi / 4, np.pi / 4)) / (1 + learning_rate_angle)
+            speed_feedback_raw = 1 - abs(2 * np.clip(_mid_line[1][0] / w, min_speed, 1 - min_speed) - 1)
             speed_feedback = (speed_feedback + learning_rate_speed * speed_feedback_raw) / (1 + learning_rate_speed)
     num_frame += 1
     cv2.line(frame, _left_line[0], _left_line[1], line_color, 3)
     cv2.line(frame, _right_line[0], _right_line[1], line_color, 3)
     cv2.line(frame, _mid_line[0], _mid_line[1], direction_line_color, 3)
-    cv2.putText(frame, 'speed_feedback: ' + str(round(speed_feedback, 3)), text_location1, font, 1, line_color, 1, cv2.LINE_AA)
-    cv2.putText(frame, 'angle: ' + str(round(np.rad2deg(angle), 3)), text_location2, font, 1, line_color, 1, cv2.LINE_AA)
-    cv2.putText(frame, 'camera_axis_to_mid: ' + str(camera_axis_to_mid), text_location3, font, 1, line_color, 1, cv2.LINE_AA)
+    cv2.putText(frame, 'speed_feedback: ' + str(round(speed_feedback, 3)), text_location1, font, 1, line_color, 1,
+                cv2.LINE_AA)
+    cv2.putText(frame, 'angle: ' + str(round(np.rad2deg(angle), 3)), text_location2, font, 1, line_color, 1,
+                cv2.LINE_AA)
+    cv2.putText(frame, 'camera_axis_to_mid: ' + str(camera_axis_to_mid), text_location3, font, 1, line_color, 1,
+                cv2.LINE_AA)
     cv2.putText(frame, 'dis_mid: ' + str(round(dis_mid, 3)), text_location4, font, 1, line_color, 1, cv2.LINE_AA)
-    cv2.circle(frame, (w//2, h), 5, direction_line_color, -1)
+    cv2.circle(frame, (w // 2, h), 5, direction_line_color, -1)
     output.write(frame)
 
 # When everything done, release the video capture object & Closes all the frames
