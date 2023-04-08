@@ -1,3 +1,6 @@
+"""
+Camera undistort demonstration
+"""
 from cam_distort import undistort_file, unpack_yaml
 import os
 input_path = './cam3_images'
