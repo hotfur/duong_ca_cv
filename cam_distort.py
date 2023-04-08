@@ -36,7 +36,7 @@ def unpack_yaml(yaml_file):
         print(data)
         mtx=np.array(data['camera_matrix'])
         dist=np.array(data['dist_coeff'])
-    newcameramtx, roi = cv.getOptimalNewCameraMatrix(mtx, dist, (w,h), 1, (w,h))
+    newcameramtx, roi = cv.getOptimalNewCameraMatrix(mtx, dist, (w,h), 0, (w,h))
     # Method 2 to undistort the image
     mapx, mapy = cv.initUndistortRectifyMap(mtx,dist,None,newcameramtx,(w,h),5)
     return mapx, mapy
