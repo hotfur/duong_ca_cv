@@ -7,6 +7,7 @@ import torch
 import kornia as K
 import yaml
 import numpy as np
+from robot_control import control
 
 # Global constants/hyper-parameters
 color_distance_threshold = 8
@@ -258,10 +259,14 @@ if __name__ == "__main__":
             num_frame = 0
             _left_line, _right_line, _mid_line, dis_mid, \
                 camera_axis_to_mid, angle, speed_feedback = calc_metrics(frame, angle, speed_feedback)
+            # Control the robot
+            control_result = control(center_velocity=speed_feedback, omega=angle)
+            if control_result is not None:
+                print(control_result)
         num_frame += 1
         # For robot control purposes the following drawing function are not needed and
         # is recommended to be turned off to save CPU cycles
-        # drawing()
+        drawing()
     # When everything done, release the video capture object & Closes all the frames
     cap.release()
     output.release()
