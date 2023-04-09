@@ -250,10 +250,9 @@ if __name__ == "__main__":
                 y_lower = w // 2 - _mid_line[0][0]
                 dis_mid = find_mid_dis(a_mid, b_mid, y_lower)
                 camera_axis_to_mid = np.clip(w // 2 - _mid_line[0][0], -w // 2, w // 2)
-                angle = (angle + learning_rate_angle * np.clip(a_mid, -np.pi / 4, np.pi / 4)) / (
-                        1 + learning_rate_angle)
+                angle = angle * (1 - learning_rate_angle) + learning_rate_angle * np.clip(a_mid, -np.pi / 4, np.pi / 4)
                 speed_feedback_raw = 1 - abs(2 * np.clip(_mid_line[1][0] / w, min_speed, 1 - min_speed) - 1)
-                speed_feedback = (speed_feedback + learning_rate_speed * speed_feedback_raw) / (1 + learning_rate_speed)
+                speed_feedback = speed_feedback * (1 - learning_rate_speed) + learning_rate_speed * speed_feedback_raw
             # Control the robot
             control_result = control(center_velocity=speed_feedback, omega=angle)
             if control_result is not None:
