@@ -18,7 +18,7 @@ learning_rate_speed = 0.4  # Learning rate for speed feedback
 min_speed = 0.1  # minimum robot speed as fraction of highest speed
 robot_height = 215  # (mm)
 robot_wide = 300  # (mm)
-distance_to_cam = np.sqrt(robot_wide**2+robot_height**2)
+distance_to_cam = np.sqrt(robot_wide ** 2 + robot_height ** 2)
 # Line color
 line_color = (255, 0, 0)
 direction_line_color = (100, 0, 255)
@@ -32,6 +32,7 @@ err = 0.0001
 yaml_file = "cam3.yaml"
 # Video Source (0 for camera/Jetson)
 video_source = '../../data/line_trace/bacho/WIN_20230401_16_14_18_Pro.mp4'
+frame_rate = 20  # Desired framerate for output video
 
 
 def unpack_yaml(file):
@@ -134,7 +135,7 @@ def pixel_to_mm(pixel, direction):
     """Approximate conversion of pixel to millimeter in world coordinates
     :param pixel: number of pixel to be converted
     :param direction: 0 is x direction, 1 is y direction"""
-    return pixel*distance_to_cam/intrx_mtx[direction][direction]
+    return pixel * distance_to_cam / intrx_mtx[direction][direction]
 
 
 def lane_making(img):
@@ -198,41 +199,26 @@ def lane_making(img):
     return (lines[0], lines[1]), (lines[2], lines[3])
 
 
-# Create a VideoCapture object and read from input file
-cap = cv2.VideoCapture(video_source)
-# Check if camera opened successfully
-if not cap.isOpened():
-    print("Error opening video file")
-# Read until video is completed
-w, h = int(cap.get(3)), int(cap.get(4))
-output = cv2.VideoWriter("output.avi", cv2.VideoWriter_fourcc(*'MJPG'), 20, (w, h))
-num_frame = 0
-angle, speed_feedback = 0, 0
-# Read YAML calibration file
-mapx, mapy, intrx_mtx = unpack_yaml(yaml_file)
-while cap.isOpened():
-    # Capture frame-by-frame
-    ret, frame = cap.read()
-    if not ret:
-        break
-    # Undistort is computational costly (1/5 interfere time), use with caution!
-    frame = cv2.remap(frame, mapx, mapy, cv2.INTER_LINEAR)
-    if num_frame % skip_frames == 0:
-        # Just to prevent numerical overflow
-        num_frame = 0
-        _lanes = lane_making(frame)
-        if _lanes is not None:
-            _left_line, _right_line = _lanes
-            _mid_line = mid_line(_left_line, _right_line)
-            # distance midline & mid of image
-            a_mid, b_mid = _mid_line[2]
-            y_lower = w // 2 - _mid_line[0][0]
-            dis_mid = find_mid_dis(a_mid, b_mid, y_lower)
-            camera_axis_to_mid = np.clip(w // 2 - _mid_line[0][0], -w // 2, w // 2)
-            angle = (angle + learning_rate_angle * np.clip(a_mid, -np.pi / 4, np.pi / 4)) / (1 + learning_rate_angle)
-            speed_feedback_raw = 1 - abs(2 * np.clip(_mid_line[1][0] / w, min_speed, 1 - min_speed) - 1)
-            speed_feedback = (speed_feedback + learning_rate_speed * speed_feedback_raw) / (1 + learning_rate_speed)
-    num_frame += 1
+def calc_metrics(frame, angle, speed_feedback):
+    _lanes = lane_making(frame)
+    if _lanes is not None:
+        _left_line, _right_line = _lanes
+        _mid_line = mid_line(_left_line, _right_line)
+        # distance midline & mid of image
+        a_mid, b_mid = _mid_line[2]
+        y_lower = w // 2 - _mid_line[0][0]
+        dis_mid = find_mid_dis(a_mid, b_mid, y_lower)
+        camera_axis_to_mid = np.clip(w // 2 - _mid_line[0][0], -w // 2, w // 2)
+        angle = (angle + learning_rate_angle * np.clip(a_mid, -np.pi / 4, np.pi / 4)) / (1 + learning_rate_angle)
+        speed_feedback_raw = 1 - abs(2 * np.clip(_mid_line[1][0] / w, min_speed, 1 - min_speed) - 1)
+        speed_feedback = (speed_feedback + learning_rate_speed * speed_feedback_raw) / (1 + learning_rate_speed)
+    return _left_line, _right_line, _mid_line, dis_mid, camera_axis_to_mid, angle, speed_feedback
+
+
+def drawing():
+    """Draw the left, right and middle lines, along with calculated metrics.
+    For robot control purposes only this function is not needed and
+    is recommended to be turned off to save CPU cycles."""
     cv2.line(frame, _left_line[0], _left_line[1], line_color, 3)
     cv2.line(frame, _right_line[0], _right_line[1], line_color, 3)
     cv2.line(frame, _mid_line[0], _mid_line[1], direction_line_color, 3)
@@ -246,6 +232,36 @@ while cap.isOpened():
     cv2.circle(frame, (w // 2, h), 5, direction_line_color, -1)
     output.write(frame)
 
-# When everything done, release the video capture object & Closes all the frames
-cap.release()
-output.release()
+
+if __name__ == "__main__":
+    # Create a VideoCapture object and read from input file
+    cap = cv2.VideoCapture(video_source)
+    # Check if camera opened successfully
+    if not cap.isOpened():
+        print("Error opening video file")
+    # Read until video is completed
+    w, h = int(cap.get(3)), int(cap.get(4))
+    output = cv2.VideoWriter("output.avi", cv2.VideoWriter_fourcc(*'MJPG'), frame_rate, (w, h))
+    # Read YAML calibration file
+    mapx, mapy, intrx_mtx = unpack_yaml(yaml_file)
+    num_frame = 0
+    angle, speed_feedback = 0, 0
+    while cap.isOpened():
+        # Capture frame-by-frame
+        ret, frame = cap.read()
+        if not ret:
+            break
+        # Undistort is computational costly (1/5 interfere time), use with caution!
+        frame = cv2.remap(frame, mapx, mapy, cv2.INTER_LINEAR)
+        if num_frame % skip_frames == 0:
+            # Just to prevent numerical overflow
+            num_frame = 0
+            _left_line, _right_line, _mid_line, dis_mid, \
+                camera_axis_to_mid, angle, speed_feedback = calc_metrics(frame, angle, speed_feedback)
+        num_frame += 1
+        # For robot control purposes the following drawing function are not needed and
+        # is recommended to be turned off to save CPU cycles
+        # drawing()
+    # When everything done, release the video capture object & Closes all the frames
+    cap.release()
+    output.release()
