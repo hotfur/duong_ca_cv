@@ -33,18 +33,13 @@ yaml_file = "cam3.yaml"
 # Video Source (0 for camera/Jetson)
 video_source = '../../data/line_trace/bacho/WIN_20230401_16_14_18_Pro.mp4'
 
-"""
-This method unpack yaml file containing the calibration information and return
-the mapping matrix of the distortion
-"""
 
-
-def unpack_yaml(yaml_file):
+def unpack_yaml(file):
     """Unpack camera calibration results
-    :param yaml_file: the file to unpack
+    :param file: the file to unpack
     :return mapx, mapx: the mapping matrices for calibrate the current image
     :return mtx: the intrinsic matrix of the camera"""
-    with open(yaml_file, "r") as f:
+    with open(file, "r") as f:
         data = yaml.load(f, Loader=yaml.loader.SafeLoader)
         print(data)
         mtx = np.array(data['camera_matrix'])
