@@ -200,22 +200,6 @@ def lane_making(img):
     return (lines[0], lines[1]), (lines[2], lines[3])
 
 
-def calc_metrics(frame, angle, speed_feedback):
-    _lanes = lane_making(frame)
-    if _lanes is not None:
-        _left_line, _right_line = _lanes
-        _mid_line = mid_line(_left_line, _right_line)
-        # distance midline & mid of image
-        a_mid, b_mid = _mid_line[2]
-        y_lower = w // 2 - _mid_line[0][0]
-        dis_mid = find_mid_dis(a_mid, b_mid, y_lower)
-        camera_axis_to_mid = np.clip(w // 2 - _mid_line[0][0], -w // 2, w // 2)
-        angle = (angle + learning_rate_angle * np.clip(a_mid, -np.pi / 4, np.pi / 4)) / (1 + learning_rate_angle)
-        speed_feedback_raw = 1 - abs(2 * np.clip(_mid_line[1][0] / w, min_speed, 1 - min_speed) - 1)
-        speed_feedback = (speed_feedback + learning_rate_speed * speed_feedback_raw) / (1 + learning_rate_speed)
-    return _left_line, _right_line, _mid_line, dis_mid, camera_axis_to_mid, angle, speed_feedback
-
-
 def drawing():
     """Draw the left, right and middle lines, along with calculated metrics.
     For robot control purposes only this function is not needed and
@@ -257,8 +241,19 @@ if __name__ == "__main__":
         if num_frame % skip_frames == 0:
             # Just to prevent numerical overflow
             num_frame = 0
-            _left_line, _right_line, _mid_line, dis_mid, \
-                camera_axis_to_mid, angle, speed_feedback = calc_metrics(frame, angle, speed_feedback)
+            _lanes = lane_making(frame)
+            if _lanes is not None:
+                _left_line, _right_line = _lanes
+                _mid_line = mid_line(_left_line, _right_line)
+                # distance midline & mid of image
+                a_mid, b_mid = _mid_line[2]
+                y_lower = w // 2 - _mid_line[0][0]
+                dis_mid = find_mid_dis(a_mid, b_mid, y_lower)
+                camera_axis_to_mid = np.clip(w // 2 - _mid_line[0][0], -w // 2, w // 2)
+                angle = (angle + learning_rate_angle * np.clip(a_mid, -np.pi / 4, np.pi / 4)) / (
+                        1 + learning_rate_angle)
+                speed_feedback_raw = 1 - abs(2 * np.clip(_mid_line[1][0] / w, min_speed, 1 - min_speed) - 1)
+                speed_feedback = (speed_feedback + learning_rate_speed * speed_feedback_raw) / (1 + learning_rate_speed)
             # Control the robot
             control_result = control(center_velocity=speed_feedback, omega=angle)
             if control_result is not None:

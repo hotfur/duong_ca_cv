@@ -46,7 +46,7 @@ def calc_speeds(center_velocity, omega):
     :param center_velocity: the desired linear velocity for the center of mass (bounded 0-1)
     :param omega: the desired steering angle
     :return: wheel speeds, normalized to range 0-GPIO_max_val"""
-    linear_speed = max_speed* center_velocity
+    linear_speed = max_speed * center_velocity
     angular_speed = max_speed * (1 - center_velocity)
     if -angle_limit < omega < angle_limit:
         return np.full(shape=4, fill_value=linear_speed)
