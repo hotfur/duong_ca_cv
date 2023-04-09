@@ -15,9 +15,9 @@ skip_frames = 3  # only process 1 frame per this number of skip frame to save re
 learning_rate_angle = 0.2  # Learning rate for angle feedback
 learning_rate_speed = 0.4  # Learning rate for speed feedback
 min_speed = 0.1  # minimum robot speed as fraction of highest speed
-robot_height = 215
-robot_wide = 300
-sensor_size = (3.58, 2.02)
+robot_height = 215 # (mm)
+robot_wide = 300 # (mm)
+distance_to_cam = np.sqrt(robot_wide**2+robot_height**2)
 # Line color
 line_color = (255, 0, 0)
 direction_line_color = (100, 0, 255)
@@ -38,7 +38,11 @@ the mapping matrix of the distortion
 """
 
 
-def unpack_yaml(yaml_file, w, h):
+def unpack_yaml(yaml_file):
+    """Unpack camera calibration results
+    :param yaml_file: the file to unpack
+    :return mapx, mapx: the mapping matrices for calibrate the current image
+    :return mtx: the intrinsic matrix of the camera"""
     with open(yaml_file, "r") as f:
         data = yaml.load(f, Loader=yaml.loader.SafeLoader)
         print(data)
@@ -47,17 +51,7 @@ def unpack_yaml(yaml_file, w, h):
     newcameramtx, roi = cv2.getOptimalNewCameraMatrix(mtx, dist, (w, h), 0, (w, h))
     # Method 2 to undistort the image
     mapx, mapy = cv2.initUndistortRectifyMap(mtx, dist, None, newcameramtx, (w, h), 5)
-    return mapx, mapy
-
-
-"""
-This method undistort image matrix from image as numpy array
-"""
-
-
-def undistort(img, mapx, mapy):
-    dst = cv2.remap(img, mapx, mapy, cv2.INTER_LINEAR)
-    return dst
+    return mapx, mapy, mtx
 
 
 def find_ax_by_c(x1, y1, x2, y2):
@@ -66,17 +60,31 @@ def find_ax_by_c(x1, y1, x2, y2):
     return a, b
 
 
-def find_mid_dis(a_mid, b_mid, y_lower, w, h):
+def find_mid_dis(a_mid, b_mid, y_lower):
+    """Find distance between robot center and the middle line
+    Note: This function is only accurate if the following assumptions are met:
+    - Robot length is much larger than the distance from robot center
+    to the center of the image in real world coordinates.
+    - Camera is calibrated
+    In other cases this figure is just an estimate
+    :param a_mid: a parameter of the middle lane
+    :param b_mid: b parameter of the middle lane
+    :param y_lower: the distance in pixel from the middle line to the center line
+    :return distance between robot center and the middle line"""
     x = (w // 2 - b_mid) / (a_mid + err)
     if h > x > 0:
-        return y_lower * (robot_wide / np.abs(h - x) + 1)
+        return pixel_to_mm(y_lower, 0) * (robot_wide / pixel_to_mm(np.abs(h - x), 1) + 1)
     elif x < 0:
-        return y_lower * (robot_wide / (h + np.abs(x)) + 1)
+        return pixel_to_mm(y_lower, 0) * (robot_wide / pixel_to_mm(h + np.abs(x), 1) + 1)
     else:
-        return y_lower * (robot_wide / np.abs(x - h) - 1)
+        return pixel_to_mm(y_lower, 0) * (robot_wide / pixel_to_mm(np.abs(x - h), 1) - 1)
 
 
-def mid_line(left_line, right_line, w, h):
+def mid_line(left_line, right_line):
+    """Find the middle line from the left and right lanes
+    :param left_line: the left lane
+    :param right_line: the right lane
+    :return: the middle line"""
     ptl1, ptl2 = left_line[0], left_line[1]
     ptr1, ptr2 = right_line[0], right_line[1]
 
@@ -124,7 +132,17 @@ def mid_line(left_line, right_line, w, h):
     return (int(y_mid_lower), int(h)), (int(y_mid_upper), int(x_mid_upper)), (a_mid, b_mid)
 
 
+def pixel_to_mm(pixel, direction):
+    """Approximate conversion of pixel to millimeter in world coordinates
+    :param pixel: number of pixel to be converted
+    :param direction: 0 is x direction, 1 is y direction"""
+    return pixel*distance_to_cam/intrx_mtx[direction][direction]
+
+
 def lane_making(img):
+    """Find the left and right lanes from an image
+    :param img: input image
+    :returns left (0) and right (1) lanes parameters"""
     arr = np.array(img)
     arr[:, 0], arr[:, -1] = arr[:, -1], arr[:, 0]
     x_rgb = torch.tensor(arr, device=device).unsqueeze(0) / 255
@@ -193,25 +211,25 @@ output = cv2.VideoWriter("output.avi", cv2.VideoWriter_fourcc(*'MJPG'), 20, (w, 
 num_frame = 0
 angle, speed_feedback = 0, 0
 # Read YAML calibration file
-mapx, mapy = unpack_yaml(yaml_file, w, h)
+mapx, mapy, intrx_mtx = unpack_yaml(yaml_file)
 while cap.isOpened():
     # Capture frame-by-frame
     ret, frame = cap.read()
     if not ret:
         break
     # Undistort is computational costly (1/5 interfere time), use with caution!
-    frame = undistort(frame, mapx, mapy)
+    frame = cv2.remap(frame, mapx, mapy, cv2.INTER_LINEAR)
     if num_frame % skip_frames == 0:
         # Just to prevent numerical overflow
         num_frame = 0
         _lanes = lane_making(frame)
         if _lanes is not None:
             _left_line, _right_line = _lanes
-            _mid_line = mid_line(_left_line, _right_line, w, h)
+            _mid_line = mid_line(_left_line, _right_line)
             # distance midline & mid of image
             a_mid, b_mid = _mid_line[2]
             y_lower = w // 2 - _mid_line[0][0]
-            dis_mid = find_mid_dis(a_mid, b_mid, y_lower, w, h)
+            dis_mid = find_mid_dis(a_mid, b_mid, y_lower)
             camera_axis_to_mid = np.clip(w // 2 - _mid_line[0][0], -w // 2, w // 2)
             angle = (angle + learning_rate_angle * np.clip(a_mid, -np.pi / 4, np.pi / 4)) / (1 + learning_rate_angle)
             speed_feedback_raw = 1 - abs(2 * np.clip(_mid_line[1][0] / w, min_speed, 1 - min_speed) - 1)
