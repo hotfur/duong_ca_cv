@@ -8,15 +8,16 @@ import kornia as K
 import yaml
 import numpy as np
 
-# Global constant
+# Global constants/hyper-parameters
 color_distance_threshold = 8
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 skip_frames = 3  # only process 1 frame per this number of skip frame to save resource
+num_contours = 6  # Number of largest contours to retain
 learning_rate_angle = 0.2  # Learning rate for angle feedback
 learning_rate_speed = 0.4  # Learning rate for speed feedback
 min_speed = 0.1  # minimum robot speed as fraction of highest speed
-robot_height = 215 # (mm)
-robot_wide = 300 # (mm)
+robot_height = 215  # (mm)
+robot_wide = 300  # (mm)
 distance_to_cam = np.sqrt(robot_wide**2+robot_height**2)
 # Line color
 line_color = (255, 0, 0)
@@ -61,7 +62,9 @@ def find_ax_by_c(x1, y1, x2, y2):
 
 
 def find_mid_dis(a_mid, b_mid, y_lower):
-    """Find distance between robot center and the middle line
+    """Find distance between robot center and the middle line.
+    Distance can be both positive (middle line on the left side) and negative (middle line on the right side)
+    to indicate the relative location of the robot to the middle line.
     Note: This function is only accurate if the following assumptions are met:
     - Robot length is much larger than the distance from robot center
     to the center of the image in real world coordinates.
@@ -178,7 +181,7 @@ def lane_making(img):
     contours_and_weights.sort(reverse=True)
     # Filter contours by area powered by image momentum
     contours = []
-    for cnt in range(min(6, len(contours_and_weights))):
+    for cnt in range(min(num_contours, len(contours_and_weights))):
         contour = contours_and_weights[cnt][2]
         moment = np.power(contours_and_weights[cnt][0], cv2.HuMoments(cv2.moments(contour))[0])
         contours.append((moment, cnt, contour))
